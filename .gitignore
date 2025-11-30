@@ -25,7 +25,7 @@ env/
 Thumbs.db
 
 # Service account JSON (should be kept secure)
-# Uncomment if you want to ignore it:
-# *service-account*.json
-# *tonal-concord*.json
+*service-account*.json
+*tonal-concord*.json
+*.json
 
