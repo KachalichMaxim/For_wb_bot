@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+.env
+.venv
+venv/
+ENV/
+*.md
+!.dockerignore
+
