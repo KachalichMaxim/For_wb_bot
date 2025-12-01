@@ -5,6 +5,7 @@ Manages Telegram bot interactions, navigation, and message sending
 import logging
 import time
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,6 +19,61 @@ import tempfile
 import os
 
 logger = logging.getLogger(__name__)
+
+
+def extract_article_number(article: str) -> int:
+    """
+    Extract numeric value from article/Offer ID for sorting.
+    
+    Examples:
+        "р20-п5-33" -> 20
+        "р25-п5-33" -> 25
+        "мд33-п2-30" -> 33
+        
+    Args:
+        article: Article string (e.g., "р20-п5-33")
+        
+    Returns:
+        Extracted number (1-99) or 999 if not found (for sorting)
+    """
+    if not article:
+        return 999
+    
+    article = str(article).strip()
+    
+    # Strategy: Remove first 1-2 NON-DIGIT characters, then find first number
+    # Try removing 2 non-digit chars first
+    if len(article) >= 2 and not article[0].isdigit() and not article[1].isdigit():
+        remaining = article[2:]
+        if remaining and remaining[0].isdigit() and remaining[0] != '0':
+            # Extract first number
+            match = re.search(r'\d+', remaining)
+            if match:
+                number = int(match.group())
+                if 1 <= number <= 99:
+                    return number
+    
+    # Try removing 1 non-digit char
+    if len(article) >= 1 and not article[0].isdigit():
+        remaining = article[1:]
+        if remaining and remaining[0].isdigit() and remaining[0] != '0':
+            # Extract first number
+            match = re.search(r'\d+', remaining)
+            if match:
+                number = int(match.group())
+                if 1 <= number <= 99:
+                    return number
+    
+    # If article starts with a digit, try to extract directly
+    if article and article[0].isdigit() and article[0] != '0':
+        match = re.search(r'\d+', article)
+        if match:
+            number = int(match.group())
+            if 1 <= number <= 99:
+                return number
+    
+    # If no valid number found, return 999 for sorting (will appear last)
+    return 999
 
 
 class TelegramHandler:
@@ -740,11 +796,13 @@ class TelegramHandler:
             for order_id, order_data in orders_map.items():
                 article = order_data.get("article", "")
                 sku = order_data.get("skus", [""])[0] if order_data.get("skus") else ""
-                # Use article or sku as sort key
-                sort_key = (article or sku or "").lower()
+                # Use article or sku for sorting
+                article_for_sort = article or sku or ""
+                # Extract numeric value for sorting (1-99)
+                sort_key = extract_article_number(article_for_sort)
                 orders_list.append((sort_key, order_id, order_data))
             
-            # Sort by article alphabetically
+            # Sort by extracted number (ascending: lower to higher)
             orders_list.sort(key=lambda x: x[0])
             logger.info(f"Sorted {len(orders_list)} orders. Starting to fetch stickers...")
             
@@ -1089,9 +1147,9 @@ class TelegramHandler:
                         "sticker": sticker,
                     })
                 
-                # Sort tasks by article (Артикул продавца) in alphabetical order
+                # Sort tasks by article (Артикул продавца) - extract number and sort ascending
                 if tasks:
-                    tasks.sort(key=lambda t: (t.get("article", "") or "").lower())
+                    tasks.sort(key=lambda t: extract_article_number(t.get("article", "") or ""))
                     logger.info(f"Prepared {len(tasks)} tasks for PDF generation from supply {supply_id}")
             
             if not tasks or len(tasks) == 0:

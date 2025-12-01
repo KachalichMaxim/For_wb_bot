@@ -4,6 +4,7 @@ Generates PDF files from TasksForPDF sheet
 """
 import logging
 import os
+import re
 import tempfile
 import requests
 from io import BytesIO
@@ -145,10 +146,57 @@ class PDFGenerator:
                 encoding='utf-8',
             )
             
-            # Sort tasks by article (Артикул продавца) in alphabetical order
+            # Sort tasks by article (Артикул продавца) - extract number and sort ascending
+            def extract_article_number(article: str) -> int:
+                """
+                Extract numeric value from article/Offer ID for sorting.
+                
+                Examples:
+                    "р20-п5-33" -> 20
+                    "р25-п5-33" -> 25
+                    "мд33-п2-30" -> 33
+                """
+                if not article:
+                    return 999
+                
+                article = str(article).strip()
+                
+                # Strategy: Remove first 1-2 NON-DIGIT characters, then find first number
+                # Try removing 2 non-digit chars first
+                if len(article) >= 2 and not article[0].isdigit() and not article[1].isdigit():
+                    remaining = article[2:]
+                    if remaining and remaining[0].isdigit() and remaining[0] != '0':
+                        # Extract first number
+                        match = re.search(r'\d+', remaining)
+                        if match:
+                            number = int(match.group())
+                            if 1 <= number <= 99:
+                                return number
+                
+                # Try removing 1 non-digit char
+                if len(article) >= 1 and not article[0].isdigit():
+                    remaining = article[1:]
+                    if remaining and remaining[0].isdigit() and remaining[0] != '0':
+                        # Extract first number
+                        match = re.search(r'\d+', remaining)
+                        if match:
+                            number = int(match.group())
+                            if 1 <= number <= 99:
+                                return number
+                
+                # If article starts with a digit, try to extract directly
+                if article and article[0].isdigit() and article[0] != '0':
+                    match = re.search(r'\d+', article)
+                    if match:
+                        number = int(match.group())
+                        if 1 <= number <= 99:
+                            return number
+                
+                return 999
+            
             def get_sort_key(task):
                 article = str(task.get('article', '')).strip()
-                return article.lower() if article else ''
+                return extract_article_number(article)
             
             sorted_tasks = sorted(tasks, key=get_sort_key)
             logger.info(f"Generating PDF with {len(sorted_tasks)} tasks")
