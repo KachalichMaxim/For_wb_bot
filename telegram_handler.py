@@ -77,24 +77,25 @@ class TelegramHandler:
             # Check if sticker is empty or "Не получен"
             has_sticker = sticker and sticker != "Не получен" and sticker.strip()
             
+            warehouse_text = f"Склад : {warehouse}\n" if warehouse else ""
+            
             if not has_sticker:
-                warehouse_text = f"Склад : {warehouse}\n" if warehouse else ""
                 message_text = (
-                    f"🆕 НОВОЕ ЗАДАНИЕ!\n\n"
-                    f"{warehouse_text}"
-                    f"№ задания: {order_id}\n"
+                    f"🆕 НОВОЕ ЗАДАНИЕ!\n"
+                    f"Артикул продавца: {article}\n"
+                    f"⚠️ Статус: Нужно собрать!\n"
                     f"Наименование: {product_name}\n"
-                    f"Артикул продавца: {article}\n\n"
-                    f"⚠️ Статус: Нужно собрать!"
+                    f"№ задания: {order_id}\n"
+                    f"{warehouse_text}"
                 )
             else:
-                warehouse_text = f"Склад : {warehouse}\n" if warehouse else ""
                 message_text = (
-                    f"{warehouse_text}"
-                    f"№ задания: {order_id}\n"
-                    f"Наименование: {product_name}\n"
+                    f"🆕 НОВОЕ ЗАДАНИЕ!\n"
                     f"Артикул продавца: {article}\n"
-                    f"Стикер: {sticker}"
+                    f"Стикер: {sticker}\n"
+                    f"Наименование: {product_name}\n"
+                    f"№ задания: {order_id}\n"
+                    f"{warehouse_text}"
                 )
             
             # Send photo with caption if available, otherwise send text only
@@ -811,20 +812,28 @@ class TelegramHandler:
                         sticker = "Нужно собрать!"
                     
                     # Format order details message
-                    if sticker and sticker != "Нужно собрать!":
-                        status_line = f"Стикер: {sticker}"
-                    else:
-                        status_line = "⚠️ Статус: Нужно собрать!"
+                    warehouse_text = f"Склад : {warehouse}\n" if warehouse else ""
                     
-                    message_text = (
-                        f"🆕 НОВОЕ ЗАДАНИЕ!\n\n"
-                        f"Склад : {warehouse}\n"
-                        f"№ задания: {order_id}\n"
-                        f"Наименование: {product_name or 'Не указано'}\n"
-                        f"Артикул продавца: {article or sku or 'Не указано'}\n\n"
-                        f"{status_line}\n"
-                        f"📦 Поставка: {supply_id}"
-                    )
+                    if sticker and sticker != "Нужно собрать!":
+                        message_text = (
+                            f"🆕 НОВОЕ ЗАДАНИЕ!\n"
+                            f"Артикул продавца: {article or sku or 'Не указано'}\n"
+                            f"Стикер: {sticker}\n"
+                            f"Наименование: {product_name or 'Не указано'}\n"
+                            f"📦 Поставка: {supply_id}\n"
+                            f"№ задания: {order_id}\n"
+                            f"{warehouse_text}"
+                        )
+                    else:
+                        message_text = (
+                            f"🆕 НОВОЕ ЗАДАНИЕ!\n"
+                            f"Артикул продавца: {article or sku or 'Не указано'}\n"
+                            f"⚠️ Статус: Нужно собрать!\n"
+                            f"Наименование: {product_name or 'Не указано'}\n"
+                            f"📦 Поставка: {supply_id}\n"
+                            f"№ задания: {order_id}\n"
+                            f"{warehouse_text}"
+                        )
                     
                     orders_to_send.append({
                         'order_id': order_id,
