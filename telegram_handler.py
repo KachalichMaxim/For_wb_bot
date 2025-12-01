@@ -501,7 +501,7 @@ class TelegramHandler:
                 return
             
             # Fetch incomplete supplies for this warehouse
-            supplies = supply_handler.fetch_all_incomplete_supplies(max_age_days=7)
+            supplies = supply_handler.fetch_all_incomplete_supplies(max_age_days=365)
             
             if not supplies:
                 keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
