@@ -951,21 +951,17 @@ class TelegramHandler:
                         logger.error(f"Failed to send text message for order {order_id}: {e}")
                         return False
             
-            # Send orders in parallel batches (10 orders at a time for maximum speed)
-            # Telegram API can handle multiple concurrent requests efficiently
-            batch_size = 10
+            # Send orders sequentially to maintain sorted order
+            # Small delay between messages to avoid rate limiting
             orders_sent = 0
-            logger.info(f"Sending {len(orders_to_send)} orders in parallel batches of {batch_size}...")
+            logger.info(f"Sending {len(orders_to_send)} orders sequentially in sorted order...")
             
-            for i in range(0, len(orders_to_send), batch_size):
-                batch = orders_to_send[i:i + batch_size]
-                # Send batch in parallel using asyncio.gather
-                results = await asyncio.gather(*[send_single_order(order) for order in batch], return_exceptions=True)
-                orders_sent += sum(1 for result in results if result is True)
-                
-                # Very small delay between batches to avoid rate limiting (50ms)
-                if i + batch_size < len(orders_to_send):
-                    await asyncio.sleep(0.05)
+            for order in orders_to_send:
+                result = await send_single_order(order)
+                if result:
+                    orders_sent += 1
+                # Small delay between messages to avoid rate limiting (100ms)
+                await asyncio.sleep(0.1)
             
             logger.info(f"Sent {orders_sent} out of {len(orders_to_send)} orders")
             
