@@ -557,9 +557,25 @@ class TelegramHandler:
                 return
             
             # Fetch incomplete supplies for this warehouse
-            supplies = supply_handler.fetch_all_incomplete_supplies(max_age_days=365)
+            logger.info(f"Starting to fetch incomplete supplies for warehouse: {warehouse} (max_age_days=365)")
+            
+            try:
+                supplies = supply_handler.fetch_all_incomplete_supplies(max_age_days=365)
+                logger.info(f"Successfully fetched supplies for warehouse {warehouse}: found {len(supplies)} incomplete supplies")
+            except Exception as e:
+                logger.error(f"Error fetching supplies for warehouse {warehouse}: {e}", exc_info=True)
+                keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"📦 Склад: {warehouse}\n\n"
+                    "❌ Ошибка при загрузке поставок.\n\n"
+                    f"Ошибка: {str(e)}",
+                    reply_markup=reply_markup,
+                )
+                return
             
             if not supplies:
+                logger.warning(f"No incomplete supplies found for warehouse: {warehouse} (after fetching with max_age_days=365)")
                 keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(

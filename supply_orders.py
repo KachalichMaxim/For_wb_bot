@@ -83,64 +83,133 @@ class SupplyOrdersHandler:
         
         # Create cutoff_date as timezone-aware (UTC)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff_date_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S UTC')
         
         logger.info(f"Fetching incomplete supplies from last {max_age_days} days...")
+        logger.info(f"Cutoff date: {cutoff_date_str} (supplies before this date will be filtered out)")
+        
+        total_supplies_received = 0
+        total_filtered_done = 0
+        total_filtered_age = 0
+        total_filtered_no_created = 0
         
         while request_count < max_requests:
+            request_count += 1
+            logger.info(f"Request {request_count}/{max_requests}: Fetching supplies (next_token={next_token})...")
+            
             result = self.fetch_supplies(limit=1000, next_token=next_token)
             
             if not result:
-                logger.warning("Failed to fetch supplies, stopping")
+                logger.warning(f"Failed to fetch supplies on request {request_count}, stopping")
                 break
             
             supplies = result.get("supplies", [])
             next_token = result.get("next")
             
-            logger.debug(f"Received {len(supplies)} supplies in batch")
+            total_supplies_received += len(supplies)
+            logger.info(f"Request {request_count}: Received {len(supplies)} supplies in batch (total so far: {total_supplies_received})")
+            
+            if len(supplies) == 0:
+                logger.info(f"Request {request_count}: No more supplies to fetch")
+                break
             
             # Filter supplies
+            batch_filtered_done = 0
+            batch_filtered_age = 0
+            batch_filtered_no_created = 0
+            batch_added = 0
+            
             for supply in supplies:
-                # Check if done is False
-                if supply.get("done", True):
+                supply_id = supply.get("id", "unknown")
+                supply_name = supply.get("name", "unknown")
+                
+                # Check if done is False (incomplete supplies have done=False)
+                done_status = supply.get("done", True)
+                if done_status:
+                    batch_filtered_done += 1
+                    logger.debug(f"Supply {supply_id} ({supply_name}) filtered: done=True (completed)")
                     continue
                 
                 # Check age - use createdAt
                 created_str = supply.get("createdAt")
-                if created_str:
-                    try:
-                        # Parse ISO format with timezone (Z means UTC)
-                        if created_str.endswith('Z'):
-                            created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-                        else:
-                            created_dt = datetime.fromisoformat(created_str)
-                        
-                        # Ensure timezone-aware for comparison
-                        if created_dt.tzinfo is None:
-                            created_dt = created_dt.replace(tzinfo=timezone.utc)
-                        
-                        if created_dt < cutoff_date:
-                            logger.debug(
-                                f"Supply {supply.get('id')} is too old "
-                                f"({created_dt.strftime('%Y-%m-%d')}), skipping"
-                            )
-                            continue
-                    except Exception as e:
-                        logger.warning(
-                            f"Error parsing date for supply {supply.get('id')}: {e}"
+                if not created_str:
+                    batch_filtered_no_created += 1
+                    logger.warning(f"Supply {supply_id} ({supply_name}) filtered: no createdAt date")
+                    continue
+                
+                try:
+                    # Parse ISO format with timezone (Z means UTC)
+                    if created_str.endswith('Z'):
+                        created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+                    else:
+                        created_dt = datetime.fromisoformat(created_str)
+                    
+                    # Ensure timezone-aware for comparison
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                    
+                    created_str_formatted = created_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                    age_days = (datetime.now(timezone.utc) - created_dt).days
+                    
+                    if created_dt < cutoff_date:
+                        batch_filtered_age += 1
+                        logger.info(
+                            f"Supply {supply_id} ({supply_name}) filtered: too old "
+                            f"(created: {created_str_formatted}, age: {age_days} days, cutoff: {cutoff_date_str})"
                         )
                         continue
-                
-                all_supplies.append(supply)
+                    
+                    # Supply passed all filters
+                    all_supplies.append(supply)
+                    batch_added += 1
+                    logger.info(
+                        f"Supply {supply_id} ({supply_name}) added: "
+                        f"(created: {created_str_formatted}, age: {age_days} days, done: {done_status})"
+                    )
+                    
+                except Exception as e:
+                    logger.error(
+                        f"Error parsing createdAt for supply {supply_id} ({supply_name}): {e}, "
+                        f"createdAt value: {created_str}"
+                    )
+                    continue
             
-            logger.info(f"Found {len(all_supplies)} incomplete supplies so far")
+            total_filtered_done += batch_filtered_done
+            total_filtered_age += batch_filtered_age
+            total_filtered_no_created += batch_filtered_no_created
             
-            # Check if we should continue pagination
-            if not next_token or next_token == 0:
-                logger.info("No next token, all supplies fetched")
+            logger.info(
+                f"Request {request_count} batch summary: "
+                f"received={len(supplies)}, "
+                f"added={batch_added}, "
+                f"filtered_done={batch_filtered_done}, "
+                f"filtered_age={batch_filtered_age}, "
+                f"filtered_no_created={batch_filtered_no_created}"
+            )
+            
+            # If no next token, we've fetched all supplies
+            if not next_token:
+                logger.info(f"No next token, all supplies fetched after {request_count} requests")
                 break
             
-            request_count += 1
-            time.sleep(0.5)  # Rate limiting
+            # Small delay to avoid rate limiting
+            time.sleep(0.1)
+        
+        logger.info(
+            f"Fetching complete. Summary: "
+            f"total_received={total_supplies_received}, "
+            f"total_added={len(all_supplies)}, "
+            f"total_filtered_done={total_filtered_done}, "
+            f"total_filtered_age={total_filtered_age}, "
+            f"total_filtered_no_created={total_filtered_no_created}"
+        )
+        
+        if len(all_supplies) == 0 and total_supplies_received > 0:
+            logger.warning(
+                f"WARNING: Received {total_supplies_received} supplies but all were filtered out! "
+                f"Filtered by done: {total_filtered_done}, by age: {total_filtered_age}, "
+                f"no createdAt: {total_filtered_no_created}"
+            )
         
         logger.info(f"Total incomplete supplies found: {len(all_supplies)}")
         return all_supplies
@@ -183,7 +252,7 @@ class SupplyOrdersHandler:
     
     def fetch_orders_for_supplies(
         self,
-        max_age_days: int = 7,
+        max_age_days: int = 365,
         date_from: Optional[int] = None,
     ) -> Dict[int, Dict]:
         """
