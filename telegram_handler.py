@@ -564,7 +564,7 @@ class TelegramHandler:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     f"📦 Склад: {warehouse}\n\n"
-                    "✅ Нет незавершенных поставок за последние 7 дней.\n\n"
+                    "✅ Нет незавершенных поставок за последние 365 дней.\n\n"
                     "Проверьте поставки на портале Wildberries.",
                     reply_markup=reply_markup,
                 )
