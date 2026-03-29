@@ -9,15 +9,26 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).parent.resolve()
 
 # Load .env from project root (cwd-independent: systemd, nohup, etc.)
-load_dotenv(BASE_DIR / ".env")
+_ENV_FILE = BASE_DIR / ".env"
+_DOTENV_LOADED = load_dotenv(_ENV_FILE)
 
 # Telegram Bot Configuration (legacy, kept for backward compatibility)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # MAX Bot Configuration
-MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN")
+# Prefer .env. Fallback only on server if needed — do not commit a real token to git.
+_MAX_BOT_TOKEN_FALLBACK = ""
+
+MAX_BOT_TOKEN = (
+    (os.getenv("MAX_BOT_TOKEN") or _MAX_BOT_TOKEN_FALLBACK or "").strip()
+)
 if not MAX_BOT_TOKEN:
-    raise ValueError("MAX_BOT_TOKEN environment variable is required")
+    raise ValueError(
+        "MAX_BOT_TOKEN is missing or empty. "
+        f"Add to {_ENV_FILE}: MAX_BOT_TOKEN=<token>. "
+        f"file_exists={_ENV_FILE.is_file()} dotenv_ok={_DOTENV_LOADED}. "
+        "Or: export MAX_BOT_TOKEN=... before python3 max_bot.py"
+    )
 
 # Google Sheets Configuration
 GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "1HpvprSmjgjPwcwVmiYReWEEpvwZ_vcTGnEpErCaAmhI")
