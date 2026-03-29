@@ -324,15 +324,18 @@ class PDFGenerator:
                 logger.warning("No sticker data provided for PDF generation")
                 return False
 
-            # Match typical WB sticker packs: one sticker per page.
-            # This also guarantees a stable physical size when printing.
+            # Sticker sheet must be exactly 58x40mm per page (not A4).
+            # This guarantees correct cutting/printing without extra paper.
+            sticker_width = 58 * mm
+            sticker_height = 40 * mm
+
             doc = SimpleDocTemplate(
                 output_path,
-                pagesize=A4,
-                rightMargin=10 * mm,
-                leftMargin=10 * mm,
-                topMargin=10 * mm,
-                bottomMargin=10 * mm,
+                pagesize=(sticker_width, sticker_height),
+                rightMargin=0,
+                leftMargin=0,
+                topMargin=0,
+                bottomMargin=0,
             )
 
             # Sort by article like we do in chat lists (extract shelf number)
@@ -375,10 +378,6 @@ class PDFGenerator:
 
             elements = []
 
-            # Physical sticker size (kept small; page contains one sticker)
-            sticker_width = 58 * mm
-            sticker_height = 40 * mm
-
             for idx, item in enumerate(sorted_stickers):
                 img_bytes = item.get("sticker_image_bytes", b"")
                 order_id = item.get("order_id", "")
@@ -391,9 +390,6 @@ class PDFGenerator:
                             width=sticker_width,
                             height=sticker_height,
                         )
-                        # Center sticker on the page
-                        img.hAlign = "CENTER"
-                        elements.append(Spacer(1, 90 * mm))
                         elements.append(img)
                     except Exception as e:
                         logger.warning(
