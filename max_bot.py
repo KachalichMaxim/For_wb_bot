@@ -59,6 +59,11 @@ async def on_start_command(event: MessageCreated):
     await handler.handle_start_command(event)
 
 
+@dp.message_created()
+async def on_plain_text(event: MessageCreated):
+    await handler.handle_plain_text(event)
+
+
 @dp.message_callback()
 async def on_callback(event: MessageCallback):
     await handler.handle_callback(event)

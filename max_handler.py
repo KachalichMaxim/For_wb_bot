@@ -117,13 +117,34 @@ class MaxHandler:
                 )
                 return
             except Exception as e:
-                logger.debug(f"Could not edit message {mid}: {e}")
+                logger.warning("edit_message failed mid=%s: %s", mid, e)
         chat_id = self._get_chat_id(event)
-        await self.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            attachments=attachments,
+        user_id = (
+            event.callback.user.user_id
+            if event.callback and event.callback.user
+            else None
         )
+        try:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                attachments=attachments,
+            )
+        except Exception as e:
+            logger.warning(
+                "send_message chat_id=%s failed: %s; retry user_id=%s",
+                chat_id,
+                e,
+                user_id,
+            )
+            if user_id is not None:
+                await self.bot.send_message(
+                    user_id=user_id,
+                    text=text,
+                    attachments=attachments,
+                )
+            else:
+                raise
 
     def _get_warehouse_for_order(self, order_id: str) -> Optional[str]:
         try:
@@ -303,8 +324,34 @@ class MaxHandler:
                 attachments=[builder.as_markup()],
             )
 
+    async def handle_plain_text(self, event: MessageCreated):
+        """Reply when user sends text without /start — avoids 'silent' bot."""
+        builder = self._build_keyboard([
+            [{"text": "🔄 Открыть меню", "payload": "back_to_start"}]
+        ])
+        try:
+            await event.message.answer(
+                text=(
+                    "Я работаю через кнопки под сообщениями.\n"
+                    "Нажми «Старт» у бота или команду /start, "
+                    "затем выбирай пункты меню.\n\n"
+                    "Или нажми кнопку ниже:"
+                ),
+                attachments=[builder.as_markup()],
+            )
+        except Exception as e:
+            logger.warning("handle_plain_text answer failed: %s", e)
+
     async def handle_callback(self, event: MessageCallback):
         """Route callback events based on payload prefix."""
+        # MAX: acknowledge callback (POST /answers), else client may hang on buttons
+        try:
+            await self.bot.send_callback(
+                callback_id=event.callback.callback_id,
+            )
+        except Exception as e:
+            logger.warning("send_callback ack failed: %s", e)
+
         data = event.callback.payload
         if not data:
             return
