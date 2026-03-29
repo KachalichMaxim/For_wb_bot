@@ -1,5 +1,5 @@
 """
-Configuration management for Wildberries Telegram Bot
+Configuration management for Wildberries Bot
 """
 import os
 from pathlib import Path
@@ -11,10 +11,13 @@ load_dotenv()
 # Base directory
 BASE_DIR = Path(__file__).parent
 
-# Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+# Telegram Bot Configuration (legacy, kept for backward compatibility)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+# MAX Bot Configuration
+MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN")
+if not MAX_BOT_TOKEN:
+    raise ValueError("MAX_BOT_TOKEN environment variable is required")
 
 # Google Sheets Configuration
 GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "1HpvprSmjgjPwcwVmiYReWEEpvwZ_vcTGnEpErCaAmhI")

@@ -3,6 +3,7 @@ Wildberries API Client
 Handles all API calls to Wildberries services
 """
 import time
+import base64
 import logging
 import requests
 from typing import List, Dict, Optional, Tuple
@@ -477,4 +478,62 @@ class WildberriesAPI:
             self.product_cache[article_lower] = result
         
         return result
+
+    def get_sticker_images(
+        self,
+        order_ids: List[int],
+        sticker_type: str = "png",
+        width: int = 58,
+        height: int = 40,
+    ) -> Dict[int, bytes]:
+        """
+        Fetch sticker PNG images for given order IDs.
+        
+        Returns:
+            Dictionary mapping order_id to decoded PNG image bytes
+        """
+        if not order_ids:
+            return {}
+
+        url = f"{WB_MARKETPLACE_API_BASE}/api/v3/orders/stickers"
+        params = {
+            "type": sticker_type,
+            "width": width,
+            "height": height,
+        }
+        data = {"orders": order_ids}
+
+        logger.info(f"Fetching sticker images for {len(order_ids)} orders...")
+
+        response = self._make_request(
+            self.marketplace_session, "POST", url, data=data, params=params
+        )
+
+        if not response:
+            logger.error("Failed to fetch sticker images")
+            return {}
+
+        try:
+            resp_data = response.json()
+            stickers_list = resp_data.get("stickers", [])
+
+            if not stickers_list:
+                logger.warning(f"No sticker images returned for orders {order_ids}")
+                return {}
+
+            result = {}
+            for sticker in stickers_list:
+                order_id = sticker.get("orderId")
+                file_b64 = sticker.get("file", "")
+                if order_id and file_b64:
+                    try:
+                        result[order_id] = base64.b64decode(file_b64)
+                    except Exception as e:
+                        logger.warning(f"Failed to decode sticker image for order {order_id}: {e}")
+
+            logger.info(f"Successfully fetched {len(result)} sticker images")
+            return result
+        except Exception as e:
+            logger.error(f"Error parsing sticker images response: {e}")
+            return {}
 

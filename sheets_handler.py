@@ -206,6 +206,49 @@ class SheetsHandler:
             logger.info(f"Created sheet: {SHEET_TASKS_FOR_PDF} with image formula")
 
     @rate_limit
+    def log_user_contact(self, chat_id: int, username: str = "",
+                         first_name: str = ""):
+        """
+        Record a user's chat_id to the Users sheet so admins can see
+        who contacted the bot and grant access by copying the ID to Access.
+        """
+        sheet_name = "Users"
+        try:
+            existing = [s.title for s in self.spreadsheet.worksheets()]
+            if sheet_name not in existing:
+                self.spreadsheet.add_worksheet(
+                    title=sheet_name, rows=1000, cols=5)
+                ws = self.spreadsheet.worksheet(sheet_name)
+                ws.update("A1:D1", [[
+                    "Chat_id", "Username", "Имя", "Дата",
+                ]], value_input_option='USER_ENTERED')
+                logger.info(f"Created sheet: {sheet_name}")
+            else:
+                ws = self.spreadsheet.worksheet(sheet_name)
+
+            try:
+                cell = ws.find(str(chat_id), in_column=1)
+                if cell:
+                    return
+            except Exception:
+                pass
+
+            from datetime import datetime
+            values = ws.col_values(1)
+            next_row = len(values) + 1 if len(values) >= 1 else 2
+            ws.update(f"A{next_row}:D{next_row}", [[
+                str(chat_id),
+                username or "",
+                first_name or "",
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ]], value_input_option='USER_ENTERED')
+            logger.info(
+                f"Logged new user contact: chat_id={chat_id}, "
+                f"username={username}, first_name={first_name}")
+        except Exception as e:
+            logger.error(f"Error logging user contact: {e}")
+
+    @rate_limit
     def get_warehouse_api_keys(self) -> List[Dict[str, str]]:
         """
         Read warehouse and API key information from WB sheet

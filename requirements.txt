@@ -1,4 +1,6 @@
-python-telegram-bot==20.7
+maxapi
+brotli
+brotlicffi
 gspread==5.12.0
 google-auth==2.25.2
 google-auth-oauthlib==1.2.0

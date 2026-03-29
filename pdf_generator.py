@@ -291,6 +291,122 @@ class PDFGenerator:
             logger.error(f"Error generating PDF: {e}")
             return False
     
+    def generate_stickers_pdf(
+        self,
+        sticker_data: List[Dict],
+        output_path: str,
+        title: str = "Стикеры",
+    ) -> bool:
+        """
+        Generate PDF with sticker barcode images laid out in a grid,
+        sorted by article/shelf number.
+        
+        Args:
+            sticker_data: List of dicts with keys:
+                order_id, article, sticker_image_bytes (PNG bytes)
+            output_path: Path to save PDF file
+            title: PDF title
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Starting stickers PDF generation for {len(sticker_data)} stickers")
+            if not sticker_data:
+                logger.warning("No sticker data provided for PDF generation")
+                return False
+
+            page_width, page_height = A4
+            doc = SimpleDocTemplate(
+                output_path,
+                pagesize=A4,
+                rightMargin=10*mm,
+                leftMargin=10*mm,
+                topMargin=15*mm,
+                bottomMargin=10*mm,
+            )
+
+            elements = []
+            styles = getSampleStyleSheet()
+            unicode_font = self.unicode_font_name or 'Helvetica'
+
+            title_style = ParagraphStyle(
+                'StickerTitle',
+                parent=styles['Heading1'],
+                fontSize=14,
+                textColor=colors.HexColor('#1a1a1a'),
+                spaceAfter=10,
+                alignment=TA_CENTER,
+                fontName=unicode_font,
+            )
+
+            label_style = ParagraphStyle(
+                'StickerLabel',
+                parent=styles['Normal'],
+                fontSize=8,
+                fontName=unicode_font,
+                alignment=TA_CENTER,
+            )
+
+            title_para = Paragraph(str(title), title_style)
+            elements.append(title_para)
+            elements.append(Spacer(1, 5))
+
+            sticker_width = 58 * mm
+            sticker_height = 40 * mm
+            cols = 3
+            usable_width = page_width - 20 * mm
+            col_width = usable_width / cols
+
+            for row_start in range(0, len(sticker_data), cols):
+                row_items = sticker_data[row_start:row_start + cols]
+                table_data_images = []
+                table_data_labels = []
+
+                for item in row_items:
+                    img_bytes = item.get("sticker_image_bytes", b"")
+                    article = item.get("article", "")
+                    order_id = item.get("order_id", "")
+
+                    if img_bytes:
+                        try:
+                            img_io = BytesIO(img_bytes)
+                            img = Image(img_io, width=sticker_width, height=sticker_height)
+                            table_data_images.append(img)
+                        except Exception as e:
+                            logger.warning(f"Error creating image for order {order_id}: {e}")
+                            table_data_images.append(Paragraph("", label_style))
+                    else:
+                        table_data_images.append(Paragraph("", label_style))
+
+                    label_text = f"{article}" if article else f"#{order_id}"
+                    table_data_labels.append(Paragraph(label_text, label_style))
+
+                while len(table_data_images) < cols:
+                    table_data_images.append(Paragraph("", label_style))
+                    table_data_labels.append(Paragraph("", label_style))
+
+                table = Table(
+                    [table_data_images, table_data_labels],
+                    colWidths=[col_width] * cols,
+                )
+                table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 2),
+                    ('TOPPADDING', (0, 1), (-1, 1), 1),
+                    ('BOTTOMPADDING', (0, 1), (-1, 1), 4),
+                ]))
+                elements.append(table)
+
+            doc.build(elements)
+            logger.info(f"Successfully generated stickers PDF: {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error generating stickers PDF: {e}")
+            return False
+
     def cleanup(self):
         """Cleanup temporary files"""
         try:

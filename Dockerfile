@@ -20,5 +20,5 @@ RUN useradd -m -u 1000 botuser && chown -R botuser:botuser /app
 USER botuser
 
 # Run the bot
-CMD ["python", "telegram_bot.py"]
+CMD ["python", "max_bot.py"]
 
