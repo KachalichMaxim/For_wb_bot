@@ -11,7 +11,15 @@ from io import BytesIO
 from typing import List, Dict, Optional
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Table,
+    TableStyle,
+    Paragraph,
+    Spacer,
+    Image,
+    PageBreak,
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -316,88 +324,86 @@ class PDFGenerator:
                 logger.warning("No sticker data provided for PDF generation")
                 return False
 
-            page_width, page_height = A4
+            # Match typical WB sticker packs: one sticker per page.
+            # This also guarantees a stable physical size when printing.
             doc = SimpleDocTemplate(
                 output_path,
                 pagesize=A4,
-                rightMargin=10*mm,
-                leftMargin=10*mm,
-                topMargin=15*mm,
-                bottomMargin=10*mm,
+                rightMargin=10 * mm,
+                leftMargin=10 * mm,
+                topMargin=10 * mm,
+                bottomMargin=10 * mm,
+            )
+
+            # Sort by article like we do in chat lists (extract shelf number)
+            def extract_article_number(article: str) -> int:
+                if not article:
+                    return 999
+                article = str(article).strip()
+                if (
+                    len(article) >= 2
+                    and not article[0].isdigit()
+                    and not article[1].isdigit()
+                ):
+                    remaining = article[2:]
+                    if remaining and remaining[0].isdigit() and remaining[0] != "0":
+                        match = re.search(r"\d+", remaining)
+                        if match:
+                            number = int(match.group())
+                            if 1 <= number <= 99:
+                                return number
+                if len(article) >= 1 and not article[0].isdigit():
+                    remaining = article[1:]
+                    if remaining and remaining[0].isdigit() and remaining[0] != "0":
+                        match = re.search(r"\d+", remaining)
+                        if match:
+                            number = int(match.group())
+                            if 1 <= number <= 99:
+                                return number
+                if article and article[0].isdigit() and article[0] != "0":
+                    match = re.search(r"\d+", article)
+                    if match:
+                        number = int(match.group())
+                        if 1 <= number <= 99:
+                            return number
+                return 999
+
+            sorted_stickers = sorted(
+                sticker_data,
+                key=lambda x: extract_article_number(str(x.get("article", "")).strip()),
             )
 
             elements = []
-            styles = getSampleStyleSheet()
-            unicode_font = self.unicode_font_name or 'Helvetica'
 
-            title_style = ParagraphStyle(
-                'StickerTitle',
-                parent=styles['Heading1'],
-                fontSize=14,
-                textColor=colors.HexColor('#1a1a1a'),
-                spaceAfter=10,
-                alignment=TA_CENTER,
-                fontName=unicode_font,
-            )
-
-            label_style = ParagraphStyle(
-                'StickerLabel',
-                parent=styles['Normal'],
-                fontSize=8,
-                fontName=unicode_font,
-                alignment=TA_CENTER,
-            )
-
-            title_para = Paragraph(str(title), title_style)
-            elements.append(title_para)
-            elements.append(Spacer(1, 5))
-
+            # Physical sticker size (kept small; page contains one sticker)
             sticker_width = 58 * mm
             sticker_height = 40 * mm
-            cols = 3
-            usable_width = page_width - 20 * mm
-            col_width = usable_width / cols
 
-            for row_start in range(0, len(sticker_data), cols):
-                row_items = sticker_data[row_start:row_start + cols]
-                table_data_images = []
-                table_data_labels = []
+            for idx, item in enumerate(sorted_stickers):
+                img_bytes = item.get("sticker_image_bytes", b"")
+                order_id = item.get("order_id", "")
 
-                for item in row_items:
-                    img_bytes = item.get("sticker_image_bytes", b"")
-                    article = item.get("article", "")
-                    order_id = item.get("order_id", "")
+                if img_bytes:
+                    try:
+                        img_io = BytesIO(img_bytes)
+                        img = Image(
+                            img_io,
+                            width=sticker_width,
+                            height=sticker_height,
+                        )
+                        # Center sticker on the page
+                        img.hAlign = "CENTER"
+                        elements.append(Spacer(1, 90 * mm))
+                        elements.append(img)
+                    except Exception as e:
+                        logger.warning(
+                            f"Error creating sticker image for order {order_id}: {e}"
+                        )
+                else:
+                    logger.warning(f"Empty sticker bytes for order {order_id}")
 
-                    if img_bytes:
-                        try:
-                            img_io = BytesIO(img_bytes)
-                            img = Image(img_io, width=sticker_width, height=sticker_height)
-                            table_data_images.append(img)
-                        except Exception as e:
-                            logger.warning(f"Error creating image for order {order_id}: {e}")
-                            table_data_images.append(Paragraph("", label_style))
-                    else:
-                        table_data_images.append(Paragraph("", label_style))
-
-                    label_text = f"{article}" if article else f"#{order_id}"
-                    table_data_labels.append(Paragraph(label_text, label_style))
-
-                while len(table_data_images) < cols:
-                    table_data_images.append(Paragraph("", label_style))
-                    table_data_labels.append(Paragraph("", label_style))
-
-                table = Table(
-                    [table_data_images, table_data_labels],
-                    colWidths=[col_width] * cols,
-                )
-                table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 2),
-                    ('TOPPADDING', (0, 1), (-1, 1), 1),
-                    ('BOTTOMPADDING', (0, 1), (-1, 1), 4),
-                ]))
-                elements.append(table)
+                if idx < len(sorted_stickers) - 1:
+                    elements.append(PageBreak())
 
             doc.build(elements)
             logger.info(f"Successfully generated stickers PDF: {output_path}")
