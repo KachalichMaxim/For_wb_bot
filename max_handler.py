@@ -79,6 +79,50 @@ class MaxHandler:
                 return cid
         return event.callback.user.user_id
 
+    def _access_lookup_keys(self, event: 'MessageCallback') -> List[int]:
+        """IDs to match against Access sheet (chat_id and user_id may differ in MAX)."""
+        keys: List[int] = []
+        if event.message and event.message.recipient:
+            r = event.message.recipient
+            if r.chat_id is not None:
+                keys.append(int(r.chat_id))
+            if r.user_id is not None:
+                keys.append(int(r.user_id))
+        if event.callback and event.callback.user:
+            keys.append(int(event.callback.user.user_id))
+        out: List[int] = []
+        seen = set()
+        for k in keys:
+            if k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
+    def _user_info_from_access(
+        self, user_access: Dict[int, Dict], event: 'MessageCallback'
+    ) -> Optional[Dict]:
+        for k in self._access_lookup_keys(event):
+            info = user_access.get(k)
+            if info:
+                return info
+        return None
+
+    def _user_info_by_ids(
+        self, user_access: Dict[int, Dict], *ids: Optional[int]
+    ) -> Optional[Dict]:
+        """Match Access sheet by any of the given numeric ids (MAX chat vs user)."""
+        for raw in ids:
+            if raw is None:
+                continue
+            try:
+                k = int(raw)
+            except (TypeError, ValueError):
+                continue
+            info = user_access.get(k)
+            if info:
+                return info
+        return None
+
     def _get_message_id(self, event: 'MessageCallback') -> Optional[str]:
         """Extract message id from a MessageCallback event."""
         if event.message and event.message.body:
@@ -124,27 +168,27 @@ class MaxHandler:
             if event.callback and event.callback.user
             else None
         )
-        try:
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                attachments=attachments,
-            )
-        except Exception as e:
-            logger.warning(
-                "send_message chat_id=%s failed: %s; retry user_id=%s",
-                chat_id,
-                e,
-                user_id,
-            )
-            if user_id is not None:
+        # MAX DM: user_id often works when chat_id does not
+        if user_id is not None:
+            try:
                 await self.bot.send_message(
                     user_id=user_id,
                     text=text,
                     attachments=attachments,
                 )
-            else:
-                raise
+                return
+            except Exception as e:
+                logger.warning(
+                    "send_message user_id=%s failed: %s; retry chat_id=%s",
+                    user_id,
+                    e,
+                    chat_id,
+                )
+        await self.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            attachments=attachments,
+        )
 
     def _get_warehouse_for_order(self, order_id: str) -> Optional[str]:
         try:
@@ -195,7 +239,14 @@ class MaxHandler:
 
         try:
             user_access = self.sheets_handler.get_user_access()
-            user_info = user_access.get(chat_id)
+            uid_alt = (
+                int(event.user.user_id)
+                if getattr(event, "user", None) and event.user.user_id
+                else None
+            )
+            user_info = self._user_info_by_ids(
+                user_access, int(chat_id), uid_alt
+            )
 
             if not user_info:
                 builder = self._build_keyboard([
@@ -253,7 +304,10 @@ class MaxHandler:
 
     async def handle_start_command(self, event: MessageCreated):
         """Handle /start command."""
-        chat_id = event.chat_id
+        rc = event.message.recipient
+        chat_part, sender_uid = event.get_ids()
+        r_user_id = rc.user_id if rc else None
+        chat_id = chat_part or r_user_id or sender_uid
 
         user_name = ""
         user_username = ""
@@ -272,7 +326,9 @@ class MaxHandler:
 
         try:
             user_access = self.sheets_handler.get_user_access()
-            user_info = user_access.get(chat_id)
+            user_info = self._user_info_by_ids(
+                user_access, chat_part, r_user_id, sender_uid
+            )
 
             if not user_info:
                 builder = self._build_keyboard([
@@ -344,72 +400,92 @@ class MaxHandler:
 
     async def handle_callback(self, event: MessageCallback):
         """Route callback events based on payload prefix."""
-        # MAX: acknowledge callback (POST /answers), else client may hang on buttons
+        data = (event.callback.payload or "").strip()
+        cb_id = event.callback.callback_id
         try:
-            await self.bot.send_callback(
-                callback_id=event.callback.callback_id,
-            )
-        except Exception as e:
-            logger.warning("send_callback ack failed: %s", e)
+            if not data:
+                return
 
-        data = event.callback.payload
-        if not data:
-            return
-
-        if data == "back_to_start":
-            await self._handle_back_to_start(event)
-        elif data.startswith("city_"):
-            city = data[len("city_"):]
-            await self._handle_city_selection(event, city)
-        elif data.startswith("warehouse_"):
-            warehouse = data[len("warehouse_"):]
-            await self._handle_warehouse_selection(event, warehouse)
-        elif data.startswith("supply_"):
-            parts = data[len("supply_"):].split("|warehouse_")
-            supply_id = parts[0]
-            warehouse = parts[1] if len(parts) > 1 else None
-            await self._handle_supply_selection(event, supply_id, warehouse)
-        elif data.startswith("send_list_"):
-            parts = data[len("send_list_"):].split("|warehouse_")
-            supply_id = parts[0]
-            warehouse = parts[1] if len(parts) > 1 else None
-            await self._handle_send_list(event, supply_id, warehouse)
-        elif data.startswith("send_pdf_"):
-            parts = data[len("send_pdf_"):].split("|warehouse_")
-            supply_id = parts[0]
-            warehouse = parts[1] if len(parts) > 1 else None
-            await self._handle_send_pdf(event, supply_id, warehouse)
-        elif data.startswith("send_stickers_"):
-            parts = data[len("send_stickers_"):].split("|warehouse_")
-            supply_id = parts[0]
-            warehouse = parts[1] if len(parts) > 1 else None
-            await self._handle_send_stickers_pdf(event, supply_id, warehouse)
-        elif data.startswith("order_"):
-            order_id = data[len("order_"):]
-            await self._handle_order_selection(event, order_id)
-        elif data.startswith("complete_"):
-            order_id = data[len("complete_"):]
-            await self._handle_order_complete(event, order_id)
-        elif data.startswith("back_to_warehouse_"):
-            warehouse = data[len("back_to_warehouse_"):]
-            await self._handle_warehouse_selection(event, warehouse)
-        elif data.startswith("back_to_supplies_"):
-            warehouse = data[len("back_to_supplies_"):]
-            await self._handle_warehouse_selection(event, warehouse)
-        elif data == "view_all_orders":
-            await self._handle_view_all_orders(event)
+            if data == "back_to_start":
+                await self._handle_back_to_start(event)
+            elif data.startswith("city_"):
+                city = data[len("city_"):]
+                await self._handle_city_selection(event, city)
+            elif data.startswith("warehouse_"):
+                warehouse = data[len("warehouse_"):]
+                await self._handle_warehouse_selection(event, warehouse)
+            elif data.startswith("supply_"):
+                parts = data[len("supply_"):].split("|warehouse_")
+                supply_id = parts[0]
+                warehouse = parts[1] if len(parts) > 1 else None
+                await self._handle_supply_selection(event, supply_id, warehouse)
+            elif data.startswith("send_list_"):
+                parts = data[len("send_list_"):].split("|warehouse_")
+                supply_id = parts[0]
+                warehouse = parts[1] if len(parts) > 1 else None
+                await self._handle_send_list(event, supply_id, warehouse)
+            elif data.startswith("send_pdf_"):
+                parts = data[len("send_pdf_"):].split("|warehouse_")
+                supply_id = parts[0]
+                warehouse = parts[1] if len(parts) > 1 else None
+                await self._handle_send_pdf(event, supply_id, warehouse)
+            elif data.startswith("send_stickers_"):
+                parts = data[len("send_stickers_"):].split("|warehouse_")
+                supply_id = parts[0]
+                warehouse = parts[1] if len(parts) > 1 else None
+                await self._handle_send_stickers_pdf(event, supply_id, warehouse)
+            elif data.startswith("order_"):
+                order_id = data[len("order_"):]
+                await self._handle_order_selection(event, order_id)
+            elif data.startswith("complete_"):
+                order_id = data[len("complete_"):]
+                await self._handle_order_complete(event, order_id)
+            elif data.startswith("back_to_warehouse_"):
+                warehouse = data[len("back_to_warehouse_"):]
+                await self._handle_warehouse_selection(event, warehouse)
+            elif data.startswith("back_to_supplies_"):
+                warehouse = data[len("back_to_supplies_"):]
+                await self._handle_warehouse_selection(event, warehouse)
+            elif data == "view_all_orders":
+                await self._handle_view_all_orders(event)
+        except Exception:
+            logger.exception("handle_callback failed payload=%r", data)
+            try:
+                uid = (
+                    event.callback.user.user_id
+                    if event.callback and event.callback.user
+                    else None
+                )
+                if uid is not None:
+                    await self.bot.send_message(
+                        user_id=uid,
+                        text="Произошла ошибка. Попробуйте позже или /start",
+                    )
+            except Exception as send_e:
+                logger.warning("callback error fallback send: %s", send_e)
+        finally:
+            try:
+                await self.bot.send_callback(callback_id=cb_id)
+            except Exception as e:
+                logger.warning("send_callback failed: %s", e)
 
     async def _handle_back_to_start(self, event: MessageCallback):
         chat_id = self._get_chat_id(event)
+        id_hint = ", ".join(str(k) for k in self._access_lookup_keys(event))
         try:
             user_access = self.sheets_handler.get_user_access()
-            user_info = user_access.get(chat_id)
+            user_info = self._user_info_from_access(user_access, event)
 
             if not user_info:
                 builder = self._build_keyboard([
-                    [{"text": "◀️ Назад", "payload": "back_to_start"}]
+                    [{"text": "🔄 Попробовать снова", "payload": "back_to_start"}]
                 ])
-                await self._edit_or_send(event, "Ошибка: доступ не найден", builder)
+                text = (
+                    "Привет! У вас нет доступа к складам.\n"
+                    f"ID для таблицы Access (любой из): {id_hint}\n\n"
+                    "Добавьте один из них в столбец Chat_id и снова нажмите кнопку."
+                )
+                await self._edit_or_send(event, text, builder)
                 return
 
             warehouses = user_info["warehouses"]
@@ -438,7 +514,7 @@ class MaxHandler:
     async def _handle_city_selection(self, event: MessageCallback, city: str):
         chat_id = self._get_chat_id(event)
         user_access = self.sheets_handler.get_user_access()
-        user_info = user_access.get(chat_id)
+        user_info = self._user_info_from_access(user_access, event)
 
         if not user_info:
             builder = self._build_keyboard([
