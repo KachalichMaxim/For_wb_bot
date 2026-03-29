@@ -1,6 +1,6 @@
 # Архитектура бота на MAX (messenger) и карта API
 
-Документ описывает, как устроен бот на платформе **MAX** и какие **HTTP-эндпоинты** задействованы при использовании библиотеки **`maxapi`**. Без логики Wildberries — только слой MAX, чтобы перенести паттерн в другой проект.
+Документ описывает, как устроен бот на платформе **MAX** и какие **HTTP-эндпоинты** задействованы при использовании библиотеки **`maxapi`**. Без доменной логики WB — слой MAX и практические паттерны из этого репозитория.
 
 Официальная документация API: [dev.max.ru — Bot API](https://dev.max.ru/docs-api).
 
@@ -11,14 +11,16 @@
 | Параметр | Значение |
 |----------|----------|
 | **Base URL** | `https://platform-api.max.ru` (константа `BaseConnection.API_URL` в `maxapi`) |
-| **Авторизация** | HTTP-заголовок `Authorization: <токен_бота>` (сырой токен, как выдал кабинет MAX) |
+| **Авторизация** | HTTP-заголовок `Authorization: <токен_бота>` (сырой токен из кабинета MAX) |
 | **Токен в окружении** | `MAX_BOT_TOKEN` (если не передать `Bot(token=...)`) |
 
 Проверка токена и профиля бота: **`GET /me`** ([документация](https://dev.max.ru/docs-api/methods/GET/me)).
 
+В проекте `config.py` подгружает **`.env` из каталога проекта** (`BASE_DIR / ".env"`), чтобы токен находился при любом `cwd` (systemd, `nohup`).
+
 ---
 
-## 2. Архитектура приложения (как в этом репозитории)
+## 2. Архитектура приложения
 
 Паттерн: **long polling** + **асинхронный диспетчер** событий.
 
@@ -36,99 +38,102 @@ flowchart LR
     MSG["POST /messages"]
     EMSG["PUT /messages"]
     UPL["POST /uploads"]
+    ANS["POST /answers"]
   end
   DP <-->|long poll| UPD
   H --> MSG
   H --> EMSG
   H --> UPL
+  H --> ANS
 ```
 
-1. **`Bot`** — HTTP-клиент ко всем методам API (хранит сессию `aiohttp`, заголовки, маркер обновлений).
-2. **`Dispatcher`** — регистрирует обработчики и крутит **`start_polling(bot)`**: цикл **`GET /updates`** с `marker`, `limit`, `timeout`.
-3. **Обработчики** — async-функции на типы апдейтов:
-   - пользователь нажал «Старт» в интерфейсе бота → **`BotStarted`**;
-   - новое сообщение в чат → **`MessageCreated`** (в т.ч. команды вроде `/start`);
-   - нажатие inline-кнопки → **`MessageCallback`** (в payload приходит строка, которую вы сами зашили в кнопку).
+1. **`Bot`** — HTTP-клиент (сессия `aiohttp`, заголовки, маркер обновлений, опционально **`after_input_media_delay`** — пауза после загрузки медиа по умолчанию ~2 с).
+2. **`Dispatcher`** — регистрирует обработчики и **`start_polling(bot)`**: цикл **`GET /updates`** (`marker`, `limit`, `timeout`).
+3. **Обработчики** (`max_bot.py` → `MaxHandler`):
+   - **`BotStarted`** — пользователь открыл бота через «Старт» в клиенте;
+   - **`MessageCreated` + `Command('start')`** — текстовая команда `/start`;
+   - **`MessageCreated` без фильтра** — любой другой текст (подсказка «используйте кнопки»), чтобы бот не казался «молчащим»;
+   - **`MessageCallback`** — нажатие inline-кнопки (`payload` — ваша маршрутизация).
 
-Точка входа в проекте: `max_bot.py` — создание `Bot`/`Dispatcher`, регистрация хендлеров, `await dp.start_polling(bot)`.
-
-Бизнес-логика (БД, внешние API) живёт в отдельном классе-хендлере; в MAX-слое остаются только маршрутизация по `callback.payload` и вызовы `bot.send_message` / `edit_message` / `message.answer`.
-
----
-
-## 3. Эндпоинты MAX API, используемые типичным ботом
-
-В `maxapi` пути собраны в `ApiPath`. Ниже — те, что реально нужны для клона «чат-бот с кнопками и картинками».
-
-| HTTP | Путь | Назначение | Обычный вызов в `maxapi` |
-|------|------|------------|---------------------------|
-| **GET** | `/updates` | Long polling: новые события | `Dispatcher.start_polling` → внутри `GetUpdates` ([док](https://dev.max.ru/docs-api/methods/GET/updates)) |
-| **POST** | `/messages` | Отправить сообщение (текст, вложения) | `bot.send_message(...)`, `message.answer(...)` ([док](https://dev.max.ru/docs-api/methods/POST/messages)) |
-| **PUT** | `/messages` | Редактировать сообщение | `bot.edit_message(message_id=..., ...)` ([док](https://dev.max.ru/docs-api/methods/PUT/messages)) |
-| **POST** | `/uploads` | Получить URL для загрузки файла (image/video/…) | внутри `process_input_media` при `InputMedia` / `InputMediaBuffer` ([док](https://dev.max.ru/docs-api/methods/POST/uploads)) |
-
-Загрузка медиа (упрощённо):
-
-1. `POST /uploads?type=...` → ответ с URL загрузки (и иногда промежуточным `token`).
-2. Клиент **заливает байты** на выданный upload-URL (не на `platform-api.max.ru`).
-3. В теле **`POST /messages`** (или **`PUT /messages`**) в `attachments` передаётся уже **токен вложения** после загрузки.
-
-Библиотека делает шаги 1–3, если вы передали `InputMedia(path="...")` или `InputMediaBuffer(bytes)`.
-
-Дополнительные эндпоинты в `ApiPath` (для других сценариев): `/chats`, `/videos`, `/answers`, `/actions`, `/pin`, `/members`, `/admins`, `/subscriptions` — смотрите [полную документацию](https://dev.max.ru/docs-api).
+Точка входа: **`max_bot.py`**. Бизнес-логика — в **`max_handler.py`** (роутинг по `callback.payload`, Google Sheets, внешние API — за пределами этого документа).
 
 ---
 
-## 4. Модель данных в запросах (важно для своего кода)
+## 3. Эндпоинты MAX API (типичный бот с кнопками и картинками)
+
+| HTTP | Путь | Назначение | Вызов в `maxapi` |
+|------|------|------------|------------------|
+| **GET** | `/updates` | Long polling | `Dispatcher.start_polling` → `GetUpdates` ([док](https://dev.max.ru/docs-api/methods/GET/updates)) |
+| **POST** | `/messages` | Отправка сообщения | `bot.send_message`, `message.answer` ([док](https://dev.max.ru/docs-api/methods/POST/messages)) |
+| **PUT** | `/messages` | Редактирование | `bot.edit_message` ([док](https://dev.max.ru/docs-api/methods/PUT/messages)) |
+| **POST** | `/uploads` | URL для загрузки файла | внутри `process_input_media` для `InputMedia` / `InputMediaBuffer` ([док](https://dev.max.ru/docs-api/methods/POST/uploads)) |
+| **POST** | `/answers` | Ответ на callback (кнопка) | `bot.send_callback(callback_id=...)` ([док](https://dev.max.ru/docs-api/methods/POST/answers)) |
+
+Остальные пути в `ApiPath`: `/chats`, `/videos`, `/actions`, `/pin`, `/members`, `/admins`, `/subscriptions` — см. [документацию](https://dev.max.ru/docs-api).
+
+### Загрузка медиа
+
+1. `POST /uploads?type=...` → URL загрузки (+ иногда промежуточный token).
+2. Заливка байтов на выданный **upload-URL** (не на `platform-api.max.ru`).
+3. В **`POST /messages`** в `attachments` передаётся токен вложения после загрузки.
+
+`maxapi` делает это при передаче **`InputMedia(path=...)`** или **`InputMediaBuffer(bytes)`**.
+
+### Скорость серии сообщений с картинками
+
+В **`SendMessage`** после медиа по умолчанию вызывается **`asyncio.sleep(bot.after_input_media_delay)`** (часто **2 с** на **каждое** сообщение с картинкой), плюс при ошибке **`attachment.not.ready`** есть повторы.
+
+Чтобы ускорить массовую рассылку (список заказов):
+
+- вызывать **`bot.send_message(..., sleep_after_input_media=False)`** — паузу отключаете, ретраи по `attachment.not.ready` остаются;
+- **параллельно** скачивать уникальные URL картинок (**`asyncio.gather` + `Semaphore`**), затем слать по одному сообщению на заказ (в этом репозитории: **`_prefetch_image_bytes`** + цикл отправки).
+
+---
+
+## 4. Модель данных и идентификаторы
 
 ### 4.1. Отправка сообщения
 
-- Query: как минимум **`chat_id`** или **`user_id`** (личный диалог).
-- JSON: **`text`**, **`attachments`** (массив), опционально **`notify`**, **`format`**, **`link`**, **`disable_link_preview`**.
+Query: **`chat_id`** или **`user_id`** (личка). В MAX **`chat_id` и `user_id` пользователя могут различаться** — если отправка по `chat_id` не срабатывает, имеет смысл повторить с **`user_id`** из `callback.user` или `recipient`.
 
-Ограничение в `maxapi`: длина **`text` &lt; 4000** символов (`SendMessage`).
+JSON: **`text`**, **`attachments`**, опционально **`notify`**, **`format`**, **`link`**, **`disable_link_preview`**.
 
-### 4.2. Inline-кнопки (callback)
+Ограничение `maxapi`: **`text` &lt; 4000** символов.
 
-- Строятся через **`InlineKeyboardBuilder`** и кнопки типа **`CallbackButton(text=..., payload=...)`**.
-- **`payload`** — произвольная строка (у вас это маршрут: префиксы вроде `city_`, `warehouse_`, …).
-- Для кнопки-**ссылки** в MAX нужен отдельный тип кнопки с полем **`url`** (не путать с `payload`).
+### 4.2. Inline-кнопки
 
-### 4.3. Картинки по URL из интернета
+- **`InlineKeyboardBuilder`** + **`CallbackButton(text=..., payload=...)`**.
+- Кнопка-**ссылка** — отдельный тип с полем **`url`** (не `payload` со ссылкой).
 
-В **`maxapi`** класс **`InputMedia`** принимает только **`path`** к файлу на диске, а не URL.
+### 4.3. Картинки по URL
 
-Паттерн для удалённого URL:
+**`InputMedia`** принимает только **`path`** к локальному файлу, не URL.
 
-1. Скачать изображение (например `requests`/`aiohttp` в `asyncio.to_thread`).
-2. Передать **`InputMediaBuffer(buffer=bytes, filename="photo.jpg")`** в `send_message` / `edit_message`.
+Паттерн: скачать байты → **`InputMediaBuffer(buffer=..., filename="photo.jpg")`**. Вызов **`InputMedia(url=...)`** в `maxapi` невалиден.
 
-Иначе попытка «обмануть» несуществующим `InputMedia(url=...)` приведёт к `TypeError` и тихому провалу, если ошибка проглочена.
+### 4.4. Callback: `chat_id`, `user_id`, `message_id`
 
-### 4.4. Callback-события: откуда брать `chat_id` и `message_id`
+- Идентификаторы для матчинга с вашей БД/таблицами: перебирать **`recipient.chat_id`**, **`recipient.user_id`**, **`callback.user.user_id`** — в Access/ролях часто записан один из них.
+- Редактирование сообщения с кнопками: **`event.message.body.mid`** → **`PUT /messages`**.
+- В проекте: **`_edit_or_send`** — сначала **`edit_message`**, при ошибке **`send_message`** (с приоритетом **`user_id`** для лички).
 
-В **`MessageCallback`** не всегда удобно взять `chat_id` из одного места. Рабочая схема:
+### 4.5. Подтверждение нажатия кнопки
 
-- **`chat_id`**: `event.message.recipient.chat_id`, иначе fallback на **`event.callback.user.user_id`** (личка).
-- **`message_id`** (для редактирования сообщения с кнопками): `event.message.body.mid`.
+После обработки логики (в т.ч. в **`finally`**) вызывается **`bot.send_callback(callback_id=...)`** → **`POST /answers`**, иначе клиент MAX может долго «крутить» нажатие.
 
-Ответ на нажатие кнопки часто делают так: **`PUT /messages`** с `message_id` (редактировать то же сообщение) или **`POST /messages`** (новое сообщение), а не «answer» с несуществующими для API полями — в этом проекте вынесено в хелпер **`_edit_or_send`**.
+### 4.6. Команды бота
 
-### 4.5. Команды бота
-
-`bot.set_my_commands(...)` в `maxapi` уходит в **`PATCH /me`** (`ChangeInfo`). В актуальной спецификации метод может считаться устаревшим — на проде оборачивают в `try/except` и не падают, если вызов недоступен.
+`bot.set_my_commands(...)` в `maxapi` идёт в **`PATCH /me`** и может быть помечен как устаревший — оборачивают в **`try/except`**.
 
 ---
 
-## 5. Особенность библиотеки `maxapi` (workaround)
+## 5. Workaround `maxapi` (Pydantic)
 
-При разборе ответов API с inline-клавиатурой у **`ChatButton`** поле **`chat_title`** в модели было обязательным, из-за чего **Pydantic v2** ломал десериализацию. В `max_bot.py` делается **monkey-patch**: `chat_title` по умолчанию `None` + `model_rebuild` для связанных моделей. Если в новой версии `maxapi` это исправят, патч можно убрать.
+У **`ChatButton`** поле **`chat_title`** было обязательным → падала десериализация ответов с клавиатурой. В **`max_bot.py`**: **`chat_title` по умолчанию `None`** + **`model_rebuild`** для связанных моделей.
 
 ---
 
-## 6. Минимальный скелет для другого проекта
-
-Зависимость: `maxapi` (и транзитивно `aiohttp`). Установка: `pip install maxapi`.
+## 6. Минимальный скелет (другой проект)
 
 ```python
 import asyncio
@@ -140,14 +145,13 @@ from maxapi.types import CallbackButton
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token="YOUR_MAX_BOT_TOKEN")  # или MAX_BOT_TOKEN в env
+bot = Bot(token="YOUR_MAX_BOT_TOKEN")
 dp = Dispatcher()
 
 
 @dp.bot_started()
 async def on_start(event: BotStarted):
-    chat_id = event.chat_id
-    await bot.send_message(chat_id=chat_id, text="Бот запущен. Напишите /start")
+    await bot.send_message(chat_id=event.chat_id, text="Напишите /start")
 
 
 @dp.message_created(Command("start"))
@@ -159,8 +163,17 @@ async def on_cmd(event: MessageCreated):
 
 @dp.message_callback()
 async def on_cb(event: MessageCallback):
-    if event.callback.payload == "ping":
-        await bot.send_message(chat_id=event.message.recipient.chat_id, text="pong")
+    try:
+        if (event.callback.payload or "").strip() == "ping":
+            await bot.send_message(
+                user_id=event.callback.user.user_id,
+                text="pong",
+            )
+    finally:
+        try:
+            await bot.send_callback(callback_id=event.callback.callback_id)
+        except Exception:
+            pass
 
 
 async def main():
@@ -171,11 +184,9 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-Дальше вы подключаете свои сервисы (БД, REST и т.д.) **за пределами** вызовов `send_message` / `edit_message`.
-
 ---
 
 ## 7. Полезные ссылки
 
-- [MAX Bot API — обзор методов](https://dev.max.ru/docs-api)
+- [MAX Bot API](https://dev.max.ru/docs-api)
 - [maxapi на PyPI](https://pypi.org/project/maxapi/)

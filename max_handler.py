@@ -146,6 +146,32 @@ class MaxHandler:
 
         return await asyncio.to_thread(_fetch)
 
+    async def _prefetch_image_bytes(
+        self, urls: List[str], *, concurrency: int = 8
+    ) -> Dict[str, bytes]:
+        """Parallel download of unique image URLs (shared photos across orders)."""
+        unique: List[str] = []
+        seen = set()
+        for u in urls:
+            s = (u or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique.append(s)
+        if not unique:
+            return {}
+        sem = asyncio.Semaphore(concurrency)
+        result: Dict[str, bytes] = {}
+
+        async def fetch_one(url: str) -> None:
+            async with sem:
+                data = await self._image_bytes_from_url(url)
+                if data:
+                    result[url] = data
+
+        await asyncio.gather(*(fetch_one(u) for u in unique))
+        return result
+
     async def _edit_or_send(self, event: 'MessageCallback',
                             text: str,
                             keyboard: Optional[InlineKeyboardBuilder] = None):
@@ -870,12 +896,16 @@ class MaxHandler:
                 await self.bot.send_message(chat_id=chat_id, text="❌ Не удалось подготовить заказы для отправки.")
                 return
 
+            photo_urls = [o.get("photo_url") or "" for o in orders_to_send]
+            image_cache = await self._prefetch_image_bytes(photo_urls, concurrency=8)
+
             orders_sent = 0
             for order in orders_to_send:
                 try:
                     attachments = []
-                    if order['photo_url']:
-                        img = await self._image_bytes_from_url(order['photo_url'])
+                    pu = (order.get("photo_url") or "").strip()
+                    if pu:
+                        img = image_cache.get(pu)
                         if img:
                             attachments.append(
                                 InputMediaBuffer(img, filename="photo.jpg")
@@ -885,11 +915,11 @@ class MaxHandler:
                         chat_id=chat_id,
                         text=order['message_text'],
                         attachments=attachments if attachments else None,
+                        sleep_after_input_media=False,
                     )
                     orders_sent += 1
                 except Exception as e:
                     logger.error(f"Failed to send order {order['order_id']}: {e}")
-                await asyncio.sleep(0.1)
 
             try:
                 orders_for_batch = []
@@ -1326,6 +1356,7 @@ class MaxHandler:
                 chat_id=chat_id,
                 text=message_text,
                 attachments=attachments,
+                sleep_after_input_media=False,
             )
 
         except Exception as e:
