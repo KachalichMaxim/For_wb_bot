@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # Base directory (project root — same folder as config.py)
 BASE_DIR = Path(__file__).parent.resolve()
 
-# Load .env from project root so MAX_BOT_TOKEN is found even if cwd differs (e.g. systemd, nohup)
+# Load .env from project root (cwd-independent: systemd, nohup, etc.)
 load_dotenv(BASE_DIR / ".env")
 
 # Telegram Bot Configuration (legacy, kept for backward compatibility)
