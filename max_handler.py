@@ -491,7 +491,9 @@ class MaxHandler:
                 logger.warning("callback error fallback send: %s", send_e)
         finally:
             try:
-                await self.bot.send_callback(callback_id=cb_id)
+                # MAX requires message or notification in /answers payload.
+                # Send a minimal notification to acknowledge the click.
+                await self.bot.send_callback(callback_id=cb_id, notification=" ")
             except Exception as e:
                 logger.warning("send_callback failed: %s", e)
 

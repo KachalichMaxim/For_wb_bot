@@ -12,6 +12,9 @@ from typing import List, Dict, Optional
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    PageTemplate,
     SimpleDocTemplate,
     Table,
     TableStyle,
@@ -329,7 +332,10 @@ class PDFGenerator:
             sticker_width = 58 * mm
             sticker_height = 40 * mm
 
-            doc = SimpleDocTemplate(
+            # SimpleDocTemplate uses a default Frame padding, which can
+            # shrink the usable area and make 58x40mm images \"too large\".
+            # Use BaseDocTemplate + Frame with zero paddings.
+            doc = BaseDocTemplate(
                 output_path,
                 pagesize=(sticker_width, sticker_height),
                 rightMargin=0,
@@ -337,6 +343,18 @@ class PDFGenerator:
                 topMargin=0,
                 bottomMargin=0,
             )
+            frame = Frame(
+                0,
+                0,
+                sticker_width,
+                sticker_height,
+                leftPadding=0,
+                bottomPadding=0,
+                rightPadding=0,
+                topPadding=0,
+                id="sticker",
+            )
+            doc.addPageTemplates([PageTemplate(id="Sticker", frames=[frame])])
 
             # Sort by article like we do in chat lists (extract shelf number)
             def extract_article_number(article: str) -> int:
