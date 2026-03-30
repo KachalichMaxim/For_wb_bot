@@ -39,42 +39,19 @@ def load_all_products(api_key: str):
     products_sheet = sheets_handler.spreadsheet.worksheet("Products")
     
     # Get existing products to avoid duplicates
-    # Use batch reading to handle large sheets
     existing_products = set()
     current_row_in_sheet = 1  # Start from row 1 (header)
     
     try:
-        # Read existing products in batches to handle large sheets
-        batch_size = 1000
-        start_row = 2  # Start from row 2 (skip header)
-        
-        while True:
-            try:
-                range_name = f"A{start_row}:A{start_row + batch_size - 1}"
-                vendor_codes = products_sheet.get(range_name)
-                
-                if not vendor_codes or len(vendor_codes) == 0:
-                    break
-                
-                for row in vendor_codes:
-                    if row and len(row) > 0 and row[0]:
-                        existing_products.add(str(row[0]).strip().lower())
-                
-                if len(vendor_codes) < batch_size:
-                    break  # Last batch
-                
-                start_row += batch_size
-            except Exception as e:
-                logger.warning(f"Stopped reading at row {start_row}: {e}")
-                break
-        
-        # Get total current row count
-        try:
-            # Get last row by finding first empty cell going backwards
-            all_col_a = products_sheet.col_values(1)
-            current_row_in_sheet = len(all_col_a) if all_col_a else 1
-        except:
-            current_row_in_sheet = 1
+        # Google Sheets имеет квоту на чтения. Для больших листов важно сделать
+        # минимум запросов. Читаем колонку A одним вызовом (без батч-циклов).
+        vendor_codes = products_sheet.get("A2:A")
+        for row in vendor_codes or []:
+            if row and row[0]:
+                existing_products.add(str(row[0]).strip().lower())
+
+        # Текущая последняя строка (header + заполненные vendorCode)
+        current_row_in_sheet = 1 + len(vendor_codes or [])
         
         logger.info(f"Found {len(existing_products)} existing products in sheet (last row: {current_row_in_sheet})")
     except Exception as e:

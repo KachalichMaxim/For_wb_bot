@@ -89,10 +89,16 @@ class WildberriesAPI:
         """
         for attempt in range(max_retries):
             try:
+                timeout = 30
+                # Content API часто отвечает дольше (карточки, пагинация)
+                if "content-api.wildberries.ru" in url:
+                    timeout = (20, 120)
                 if method.upper() == "GET":
-                    response = session.get(url, params=params, timeout=30)
+                    response = session.get(url, params=params, timeout=timeout)
                 elif method.upper() == "POST":
-                    response = session.post(url, json=data, params=params, timeout=30)
+                    response = session.post(
+                        url, json=data, params=params, timeout=timeout
+                    )
                 else:
                     logger.error(f"Unsupported HTTP method: {method}")
                     return None
