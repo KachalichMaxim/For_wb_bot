@@ -60,3 +60,13 @@ WB_API_RATE_LIMIT_DELAY = 60  # seconds for 429 responses
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "bot.log")
+
+# Local product photo cache (see sync_product_images.py)
+_product_img_cache = os.getenv("PRODUCT_IMAGE_CACHE_DIR", "").strip()
+PRODUCT_IMAGE_CACHE_DIR = (
+    Path(_product_img_cache).resolve()
+    if _product_img_cache
+    else (BASE_DIR / "data" / "product_images")
+)
+PRODUCT_IMAGE_HTTP_TIMEOUT = int(os.getenv("PRODUCT_IMAGE_HTTP_TIMEOUT", "90"))
+PRODUCT_IMAGE_HTTP_RETRIES = int(os.getenv("PRODUCT_IMAGE_HTTP_RETRIES", "3"))

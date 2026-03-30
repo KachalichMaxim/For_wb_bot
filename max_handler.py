@@ -7,8 +7,9 @@ import asyncio
 import re
 import tempfile
 import os
+import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 import requests
 from maxapi import Bot
@@ -25,8 +26,14 @@ from sheets_handler import SheetsHandler
 from supply_orders import SupplyOrdersHandler
 from wb_api import WildberriesAPI
 from pdf_generator import PDFGenerator
+from config import PRODUCT_IMAGE_HTTP_RETRIES, PRODUCT_IMAGE_HTTP_TIMEOUT
+from product_image_cache import read_cached_image
 
 logger = logging.getLogger(__name__)
+
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; WB-supplies-bot/1.0)",
+}
 
 
 def extract_article_number(article: str) -> int:
@@ -129,47 +136,84 @@ class MaxHandler:
             return event.message.body.mid
         return None
 
-    async def _image_bytes_from_url(self, url: str) -> Optional[bytes]:
-        """Download image bytes for MAX upload (InputMedia only accepts local path)."""
+    async def _image_bytes_from_url(
+        self, url: str, article: Optional[str] = None
+    ) -> Optional[bytes]:
+        """Load image bytes: local cache by article first, then HTTP with retries."""
         url = (url or "").strip()
         if not url:
             return None
 
+        art = (article or "").strip()
+        if art:
+            cached = read_cached_image(art)
+            if cached:
+                return cached
+
         def _fetch() -> Optional[bytes]:
-            try:
-                r = requests.get(url, timeout=30)
-                if r.status_code == 200 and r.content:
-                    return r.content
-            except Exception as e:
-                logger.warning("Failed to download image %s: %s", url[:160], e)
+            last_err: Optional[BaseException] = None
+            for attempt in range(PRODUCT_IMAGE_HTTP_RETRIES):
+                try:
+                    r = requests.get(
+                        url,
+                        timeout=(20, PRODUCT_IMAGE_HTTP_TIMEOUT),
+                        headers=_HTTP_HEADERS,
+                    )
+                    if r.status_code == 200 and r.content:
+                        return r.content
+                except Exception as e:
+                    last_err = e
+                    if attempt + 1 < PRODUCT_IMAGE_HTTP_RETRIES:
+                        time.sleep(1.5 * (attempt + 1))
+            logger.warning(
+                "Failed to download image %s after %s tries: %s",
+                url[:160],
+                PRODUCT_IMAGE_HTTP_RETRIES,
+                last_err,
+            )
             return None
 
         return await asyncio.to_thread(_fetch)
 
-    async def _prefetch_image_bytes(
-        self, urls: List[str], *, concurrency: int = 8
+    async def _prefetch_product_images(
+        self,
+        url_article_pairs: List[Tuple[str, str]],
+        *,
+        concurrency: int = 8,
     ) -> Dict[str, bytes]:
-        """Parallel download of unique image URLs (shared photos across orders)."""
-        unique: List[str] = []
-        seen = set()
-        for u in urls:
-            s = (u or "").strip()
-            if not s or s in seen:
-                continue
-            seen.add(s)
-            unique.append(s)
-        if not unique:
-            return {}
-        sem = asyncio.Semaphore(concurrency)
+        """Fill url -> bytes: prefer on-disk cache per article, then parallel HTTP per unique URL."""
         result: Dict[str, bytes] = {}
+        pending_urls: List[str] = []
+        seen_pending = set()
 
-        async def fetch_one(url: str) -> None:
+        for url, article in url_article_pairs:
+            u = (url or "").strip()
+            if not u:
+                continue
+            if u in result:
+                continue
+            art = (article or "").strip()
+            if art:
+                cached = read_cached_image(art)
+                if cached:
+                    result[u] = cached
+                    continue
+            if u not in seen_pending:
+                seen_pending.add(u)
+                pending_urls.append(u)
+
+        if not pending_urls:
+            return result
+
+        sem = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(u: str) -> None:
             async with sem:
-                data = await self._image_bytes_from_url(url)
+                data = await self._image_bytes_from_url(u, article=None)
                 if data:
-                    result[url] = data
+                    result[u] = data
 
-        await asyncio.gather(*(fetch_one(u) for u in unique))
+        await asyncio.gather(*(fetch_one(u) for u in pending_urls))
         return result
 
     async def _edit_or_send(self, event: 'MessageCallback',
@@ -898,8 +942,13 @@ class MaxHandler:
                 await self.bot.send_message(chat_id=chat_id, text="❌ Не удалось подготовить заказы для отправки.")
                 return
 
-            photo_urls = [o.get("photo_url") or "" for o in orders_to_send]
-            image_cache = await self._prefetch_image_bytes(photo_urls, concurrency=8)
+            url_article_pairs = [
+                (o.get("photo_url") or "", o.get("article") or "")
+                for o in orders_to_send
+            ]
+            image_cache = await self._prefetch_product_images(
+                url_article_pairs, concurrency=8
+            )
 
             orders_sent = 0
             for order in orders_to_send:
@@ -1348,7 +1397,9 @@ class MaxHandler:
             attachments = [builder.as_markup()]
             photo_url = task.get('photo_url', '').strip()
             if photo_url:
-                img = await self._image_bytes_from_url(photo_url)
+                img = await self._image_bytes_from_url(
+                    photo_url, article=(task.get("article") or "").strip() or None
+                )
                 if img:
                     attachments.append(
                         InputMediaBuffer(img, filename="photo.jpg")

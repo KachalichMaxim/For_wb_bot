@@ -24,6 +24,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Product photos (sync via sync_product_images.py)
+data/product_images/
+
 # Service account JSON (should be kept secure)
 *service-account*.json
 *tonal-concord*.json

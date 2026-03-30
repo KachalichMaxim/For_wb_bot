@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import requests
 from io import BytesIO
 from typing import List, Dict, Optional
@@ -28,6 +29,9 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+from config import PRODUCT_IMAGE_HTTP_RETRIES, PRODUCT_IMAGE_HTTP_TIMEOUT
+from product_image_cache import read_cached_image
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from PIL import Image as PILImage
 import os
@@ -61,25 +65,48 @@ class PDFGenerator:
             logger.warning(f"Error registering Unicode font: {e}")
         logger.info(f"PDF generator initialized with temp dir: {self.temp_dir}")
     
-    def _download_image(self, image_url: str) -> Optional[BytesIO]:
+    def _download_image(
+        self, image_url: str, article: str = ""
+    ) -> Optional[BytesIO]:
         """
-        Download image from URL
-        
-        Args:
-            image_url: Image URL
-            
-        Returns:
-            BytesIO object with image data or None
+        Load image: local cache by vendor article, else HTTP with retries.
         """
         if not image_url or not image_url.strip():
             return None
-        
+
+        raw: Optional[bytes] = None
+        art = (article or "").strip()
+        if art:
+            raw = read_cached_image(art)
+
+        if not raw:
+            last_err: Optional[BaseException] = None
+            for attempt in range(PRODUCT_IMAGE_HTTP_RETRIES):
+                try:
+                    response = requests.get(
+                        image_url.strip(),
+                        timeout=(20, PRODUCT_IMAGE_HTTP_TIMEOUT),
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (compatible; WB-supplies-bot/1.0)",
+                        },
+                    )
+                    response.raise_for_status()
+                    raw = response.content
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt + 1 < PRODUCT_IMAGE_HTTP_RETRIES:
+                        time.sleep(1.5 * (attempt + 1))
+            if not raw:
+                logger.warning(
+                    "Error downloading image from %s: %s",
+                    image_url,
+                    last_err,
+                )
+                return None
+
         try:
-            response = requests.get(image_url, timeout=10)
-            response.raise_for_status()
-            
-            # Verify it's an image
-            img = PILImage.open(BytesIO(response.content))
+            img = PILImage.open(BytesIO(raw))
             
             # Convert to RGB if necessary (for JPEG)
             if img.mode in ('RGBA', 'LA', 'P'):
@@ -93,10 +120,10 @@ class PDFGenerator:
             img_bytes = BytesIO()
             img.save(img_bytes, format='JPEG', quality=85)
             img_bytes.seek(0)
-            
+
             return img_bytes
         except Exception as e:
-            logger.warning(f"Error downloading image from {image_url}: {e}")
+            logger.warning("Error processing image from %s: %s", image_url, e)
             return None
     
     def generate_pdf_from_tasks(
@@ -247,7 +274,7 @@ class PDFGenerator:
                     # Download and add image if available
                     if photo_url:
                         try:
-                            img_data = self._download_image(photo_url)
+                            img_data = self._download_image(photo_url, article)
                             if img_data:
                                 # Resize image to fit on page (max width 150mm)
                                 img = Image(img_data, width=150*mm, height=150*mm, kind='proportional')
