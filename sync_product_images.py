@@ -24,6 +24,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from config import LOG_FILE, LOG_LEVEL, PRODUCT_IMAGE_CACHE_DIR
+from image_download_headers import image_request_headers
 from product_image_cache import cache_path_for_article, write_cached_image
 from sheets_handler import SheetsHandler
 
@@ -36,12 +37,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-_HTTP_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; WB-supplies-bot/1.0; +local-cache-sync)"
-    ),
-}
 
 
 def _session() -> requests.Session:
@@ -62,7 +57,11 @@ def _download(
     session: requests.Session, url: str, connect_s: int, read_s: int
 ) -> Optional[bytes]:
     try:
-        r = session.get(url, timeout=(connect_s, read_s), headers=_HTTP_HEADERS)
+        r = session.get(
+            url,
+            timeout=(connect_s, read_s),
+            headers=image_request_headers(url),
+        )
         if r.status_code == 200 and r.content:
             return r.content
         logger.warning("HTTP %s for %s", r.status_code, url[:120])

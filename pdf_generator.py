@@ -31,6 +31,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from config import PRODUCT_IMAGE_HTTP_RETRIES, PRODUCT_IMAGE_HTTP_TIMEOUT
+from image_download_headers import image_request_headers
 from product_image_cache import read_cached_image
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from PIL import Image as PILImage
@@ -86,9 +87,7 @@ class PDFGenerator:
                     response = requests.get(
                         image_url.strip(),
                         timeout=(20, PRODUCT_IMAGE_HTTP_TIMEOUT),
-                        headers={
-                            "User-Agent": "Mozilla/5.0 (compatible; WB-supplies-bot/1.0)",
-                        },
+                        headers=image_request_headers(image_url),
                     )
                     response.raise_for_status()
                     raw = response.content

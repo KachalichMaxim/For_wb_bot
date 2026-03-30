@@ -27,13 +27,10 @@ from supply_orders import SupplyOrdersHandler
 from wb_api import WildberriesAPI
 from pdf_generator import PDFGenerator
 from config import PRODUCT_IMAGE_HTTP_RETRIES, PRODUCT_IMAGE_HTTP_TIMEOUT
+from image_download_headers import image_request_headers
 from product_image_cache import read_cached_image
 
 logger = logging.getLogger(__name__)
-
-_HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; WB-supplies-bot/1.0)",
-}
 
 
 def extract_article_number(article: str) -> int:
@@ -157,7 +154,7 @@ class MaxHandler:
                     r = requests.get(
                         url,
                         timeout=(20, PRODUCT_IMAGE_HTTP_TIMEOUT),
-                        headers=_HTTP_HEADERS,
+                        headers=image_request_headers(url),
                     )
                     if r.status_code == 200 and r.content:
                         return r.content
