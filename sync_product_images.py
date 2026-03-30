@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Download product photos from the Products sheet («Фото») into a local cache
-keyed by «Артикул продавца». The bot reads these files first (Ozon CDN timeouts).
+keyed by «Артикул продавца». The bot reads these files first (Ozon timeouts).
 
 Cron example (daily 03:30):
 
@@ -75,6 +75,30 @@ def main() -> int:
         description="Sync Products «Фото» URLs to local JPEG cache.",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Backward-compatible alias for --max-attempts. "
+            "Process at most N candidate rows (0 = no limit)."
+        ),
+    )
+    parser.add_argument(
+        "--target-success",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Stop after saving N images (0 = no target).",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Process at most N candidate rows (0 = no limit).",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-download even if file exists and is fresh.",
@@ -121,23 +145,35 @@ def main() -> int:
     session = _session()
     ok = skip = fail = 0
 
+    attempts = 0
     for rec in records:
         article = str(rec.get("Артикул продавца", "")).strip()
         url = str(rec.get("Фото", "")).strip()
         if not article or not url:
             continue
 
+        # limits (limit is kept for backward compatibility)
+        max_attempts = args.max_attempts or args.limit
+        if max_attempts and attempts >= max_attempts:
+            break
+
         path = cache_path_for_article(article)
         if path.is_file() and not args.force:
-            if args.max_age_days > 0 and (now - path.stat().st_mtime) < max_age:
+            age_s = now - path.stat().st_mtime
+            if args.max_age_days > 0 and age_s < max_age:
                 skip += 1
                 continue
 
+        attempts += 1
         data = _download(session, url, args.connect_timeout, args.read_timeout)
         if data and write_cached_image(article, data):
             ok += 1
+            logger.info("saved %s -> %s", article, str(path))
+            if args.target_success and ok >= args.target_success:
+                break
         else:
             fail += 1
+            logger.warning("failed %s (%s)", article, url[:160])
 
         if args.pause > 0:
             time.sleep(args.pause)
@@ -148,6 +184,8 @@ def main() -> int:
         skip,
         fail,
     )
+    if args.target_success:
+        return 0 if ok >= args.target_success else 1
     return 0 if fail == 0 else 1
 
 
